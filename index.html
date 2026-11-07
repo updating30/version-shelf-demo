@@ -1,0 +1,867 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>バージョンの棚（体験版）</title>
+<meta name="description" content="ソフトの版（バージョン）をCDの棚のように並べ、1枚を開くとリリースノートが読める体験版。ソフトも版の中身もすべて架空です。">
+</head>
+<body>
+<div class="demo-band" role="note">
+  <b>体験版</b><span>ソフト「Sample Notes」も版の中身もすべて架空です</span><a href="https://updating30.github.io/portfolio/">ほかの作品</a>
+</div><style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=Roboto+Mono:wght@500&display=swap');
+
+:root {
+  color-scheme: dark;
+  --bg: #101218;
+  --bg-deep: #08090C;
+  --tx: #F4F5F7;
+  --tx2: #A6ACB8;
+  --tx3: #6E7480;
+  --line: rgba(244, 245, 247, .14);
+  --add: #7EE2A0;
+  --chg: #8DB8FF;
+  --fix: #FFD27A;
+  --del: #FF9A9A;
+  --f-ui: 'Noto Sans JP', system-ui, -apple-system, 'Hiragino Sans', 'Yu Gothic UI', sans-serif;
+  --f-mono: 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --out: cubic-bezier(.2, .9, .25, 1);
+}
+
+/* 背景の色の移り変わり（600ms）。色そのものを動かすので、ぼかしの重い処理は要らない */
+@property --bg-a { syntax: '<color>'; inherits: false; initial-value: #101218; }
+@property --bg-b { syntax: '<color>'; inherits: false; initial-value: #101218; }
+@property --bg-c { syntax: '<color>'; inherits: false; initial-value: #101218; }
+@property --bg-g { syntax: '<color>'; inherits: true; initial-value: #101218; }
+
+* { box-sizing: border-box; }
+html { background: var(--bg); overflow-x: hidden; -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--tx);
+  font-family: var(--f-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; }
+.mono { font-family: var(--f-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
+.vh { position: fixed; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- 背景（3Dの外の層） ---------- */
+.bg {
+  position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none;
+  background:
+    radial-gradient(70% 55% at 22% 18%, var(--bg-a), transparent 72%),
+    radial-gradient(65% 60% at 82% 30%, var(--bg-b), transparent 72%),
+    radial-gradient(80% 55% at 50% 100%, var(--bg-c), transparent 75%),
+    var(--bg);
+  transition: --bg-a 600ms ease, --bg-b 600ms ease, --bg-c 600ms ease, --bg-g 600ms ease;
+}
+.bg::after { /* 下へ向かって最下層の色に沈める */
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(to bottom, rgba(8, 9, 12, 0) 60%, rgba(8, 9, 12, .6) 100%);
+}
+.glow {
+  position: absolute; left: 50%; top: 64%; width: 96vmin; height: 70vmin; margin: -35vmin 0 0 -48vmin;
+  background: radial-gradient(closest-side, var(--bg-g), transparent);
+  opacity: .9; transition: opacity .4s ease; /* 文字の乗らない棚の中央だけを明るくする。開いた画面では消す */
+}
+.is-detail .glow { opacity: 0; }
+
+/* ---------- 棚の画面 ---------- */
+.app {
+  position: relative; z-index: 1;
+  height: 100svh; min-height: 560px;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  padding: max(10px, env(safe-area-inset-top, 0px)) 0 max(14px, env(safe-area-inset-bottom, 0px));
+}
+.head { text-align: center; padding-top: clamp(4px, 1.6vh, 18px); }
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: .18em; color: var(--tx2); font-weight: 500; }
+.tw { position: relative; height: calc(var(--tfs) * 1.12); margin-top: .1em; --tfs: clamp(48px, 10vw, 104px); }
+.ttl {
+  position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center;
+  font: 900 var(--tfs)/1 var(--f-ui); letter-spacing: -.02em; white-space: nowrap; will-change: transform, opacity;
+}
+.meta { margin: .3em 0 0; font-size: 14px; color: var(--tx2); display: flex; gap: .7em; justify-content: center; flex-wrap: wrap; min-height: 1.6em; }
+.meta .sep { opacity: .6; }
+
+.stage {
+  position: relative; min-height: 0; outline: none; user-select: none; -webkit-user-select: none;
+  touch-action: pan-y; cursor: grab; overflow: clip;
+  perspective: var(--persp, 1300px); perspective-origin: 50% var(--cy, 46%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+}
+.stage.dragging { cursor: grabbing; }
+.stage:focus-visible::after {
+  content: ''; position: absolute; inset: 4px; border-radius: 14px; pointer-events: none;
+  outline: 2px solid rgba(244, 245, 247, .55); outline-offset: 0;
+}
+.floor {
+  position: absolute; left: 0; right: 0; top: calc(var(--cy, 46%) + var(--H, 200px) * .5); bottom: 0; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, .07) 0, rgba(8, 9, 12, 0) 2px, rgba(8, 9, 12, .35) 38%, rgba(8, 9, 12, .85) 100%);
+}
+.rack { position: absolute; left: 50%; top: var(--cy, 46%); width: 0; height: 0; transform-style: preserve-3d; }
+.hint { position: absolute; left: 0; right: 0; bottom: 4px; margin: 0; text-align: center; font-size: 12px; color: var(--tx); pointer-events: none; letter-spacing: .04em; transition: opacity .5s; }
+.hint.gone { opacity: 0; }
+
+/* ケース。--W は幅（px）、--H は高さ、--D は厚み */
+.case { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-style: preserve-3d; will-change: transform; }
+.box { position: absolute; left: calc(var(--W) * -.5); top: calc(var(--H) * -.5); width: var(--W); height: var(--H); transform-style: preserve-3d; }
+.box.refl { top: calc(var(--H) * .5 + 3px); pointer-events: none; }
+.face { position: absolute; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.face .fc { position: absolute; inset: 0; overflow: hidden; }
+.refl .fc {
+  transform: scaleY(-1);
+  -webkit-mask-image: linear-gradient(to top, rgba(0, 0, 0, .42) 0%, rgba(0, 0, 0, 0) 52%);
+          mask-image: linear-gradient(to top, rgba(0, 0, 0, .42) 0%, rgba(0, 0, 0, 0) 52%);
+}
+.face.front { inset: 0; transform: translateZ(calc(var(--D) / 2)); opacity: var(--fo, 1); }
+.face.sp { top: 0; width: var(--D); height: 100%; }
+.face.sl { left: calc(var(--D) / -2); transform: rotateY(-90deg); }
+.face.sr { left: calc(100% - var(--D) / 2); transform: rotateY(90deg); }
+.shade { position: absolute; inset: 0; background: #000; opacity: var(--shade, 0); pointer-events: none; }
+
+/* ケースの前面：ガラス・ちょうつがい・表紙 */
+.cf { position: absolute; inset: 0; background: linear-gradient(135deg, #2a2e37, #14161c); border: 1px solid rgba(255, 255, 255, .16); border-radius: 2px; overflow: hidden; }
+.hinge {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 9.5%;
+  background:
+    repeating-linear-gradient(to bottom, rgba(255, 255, 255, .06) 0 2px, rgba(0, 0, 0, .25) 2px 4px),
+    linear-gradient(90deg, #3a3e48, #1b1d24);
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, .1), inset 1px 0 0 rgba(0, 0, 0, .5);
+}
+.gloss { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(115deg, rgba(255, 255, 255, .20) 0%, rgba(255, 255, 255, 0) 30%, rgba(255, 255, 255, 0) 68%, rgba(255, 255, 255, .09) 100%); }
+
+/* 表紙の絵（番号と色から自動で作る） */
+.art {
+  position: absolute; left: 12%; right: 3%; top: 4%; bottom: 4%; overflow: hidden; color: #fff;
+  background: linear-gradient(150deg, var(--c1), var(--c2));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, .35);
+}
+.art .lines { position: absolute; inset: 0; background: repeating-linear-gradient(to bottom, transparent 0 calc(var(--W) * .05), rgba(255, 255, 255, .075) calc(var(--W) * .05) calc(var(--W) * .05 + 1px)); }
+.art .orb { position: absolute; right: -20%; top: -26%; width: 82%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(circle at 36% 36%, rgba(255, 255, 255, .3), rgba(255, 255, 255, 0) 68%); }
+.art .ring { position: absolute; right: 9%; top: 11%; width: 34%; aspect-ratio: 1; border-radius: 50%; border: calc(var(--W) * .028) solid rgba(255, 255, 255, .3); }
+.art .ring.r2 { width: 20%; right: 16%; top: 18%; border-width: calc(var(--W) * .016); }
+.art .cap { position: absolute; left: 6%; top: 5.5%; font: 700 calc(var(--W) * .034)/1.25 var(--f-ui); letter-spacing: .03em; opacity: .95; white-space: nowrap; }
+.art .num { position: absolute; left: 4%; bottom: 1%; font: 900 calc(var(--W) * .46)/.84 var(--f-ui); letter-spacing: -.02em; text-shadow: 0 calc(var(--W) * .012) calc(var(--W) * .035) rgba(0, 0, 0, .28); white-space: nowrap; }
+
+/* 背表紙 */
+.sp .fc { background: linear-gradient(90deg, var(--s1), var(--s2)); border-top: 1px solid rgba(255, 255, 255, .16); border-bottom: 1px solid rgba(0, 0, 0, .4); }
+.sp .fc::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 6%; background: var(--c1); opacity: .95; }
+.sp .fc::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(255, 255, 255, .22), rgba(255, 255, 255, 0) 34%, rgba(0, 0, 0, .18)); }
+.spt { position: absolute; inset: 9% 0 4% 0; writing-mode: vertical-rl; display: flex; align-items: center; gap: .9em; font-size: calc(var(--D) * .4); line-height: 1; white-space: nowrap; color: rgba(255, 255, 255, .94); z-index: 1; }
+.spt b { font-weight: 700; letter-spacing: .06em; opacity: .9; }
+.spt span { font-family: var(--f-mono); font-weight: 500; letter-spacing: .02em; }
+
+.case .box.main .front { cursor: pointer; }
+
+/* ---------- 下：スクラバーと最新へ ---------- */
+.foot { width: min(100%, 880px); margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 24px; padding-top: 6px; }
+.scrub { height: 46px; cursor: pointer; touch-action: none; display: flex; align-items: center; outline: none; border-radius: 8px; }
+.scrub:focus-visible { outline: 2px solid rgba(244, 245, 247, .55); outline-offset: 2px; }
+.ticks { width: 100%; display: flex; align-items: center; justify-content: space-between; height: 100%; pointer-events: none; }
+.ticks i { display: block; width: calc(1px + 2px * var(--k, 0)); height: calc(10px + 24px * var(--k, 0)); border-radius: 2px; background: rgb(244, 245, 247); opacity: calc(.3 + .7 * var(--k, 0)); }
+.count { margin: 0; text-align: center; font-size: 14px; color: var(--tx); letter-spacing: .06em; }
+.latest {
+  height: 46px; padding: 0 22px 0 18px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+  background: rgba(244, 245, 247, .08); border: 1px solid rgba(244, 245, 247, .2); font-size: 15px; font-weight: 500;
+  transition: background .2s, transform .15s var(--out), opacity .2s;
+}
+.latest:hover { background: rgba(244, 245, 247, .16); }
+.latest:active { transform: scale(.96); }
+.latest:focus-visible { outline: 2px solid rgba(244, 245, 247, .7); outline-offset: 2px; }
+.latest:disabled { opacity: .45; cursor: default; }
+.latest svg { width: 18px; height: 18px; }
+@media (max-width: 560px) {
+  .foot { grid-template-columns: minmax(0, 1fr); row-gap: 4px; justify-items: stretch; }
+  .latest { justify-self: center; margin-top: 8px; }
+}
+
+/* ---------- 1枚を開いた画面 ---------- */
+.detail { position: fixed; inset: 0; z-index: 5; overflow-y: auto; overflow-x: hidden; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); outline: none; }
+.detail[hidden] { display: none; }
+.back {
+  position: fixed; z-index: 7; top: max(14px, env(safe-area-inset-top, 0px)); left: max(16px, env(safe-area-inset-left, 0px));
+  height: 44px; padding: 0 20px 0 14px; border-radius: 999px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+  background: rgba(16, 18, 24, .55); border: 1px solid rgba(244, 245, 247, .22); font-size: 15px; font-weight: 500;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); transition: background .2s, transform .15s var(--out);
+}
+.back:hover { background: rgba(244, 245, 247, .16); }
+.back:active { transform: scale(.96); }
+.back:focus-visible { outline: 2px solid rgba(244, 245, 247, .7); outline-offset: 2px; }
+.back svg { width: 18px; height: 18px; }
+.back kbd { font: 500 11px var(--f-mono); color: var(--tx2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; margin-left: 2px; }
+@media (pointer: coarse) { .back kbd { display: none; } }
+
+.dwrap {
+  min-height: 100%; display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: center;
+  gap: clamp(28px, 5vw, 84px); padding: 88px clamp(0px, 4vw, 64px) 56px; max-width: 1360px; margin: 0 auto;
+}
+.dleft { display: grid; place-items: center; perspective: 1900px; }
+.dcase { --W: clamp(220px, min(40vw, 62vh), 560px); --H: calc(var(--W) * .9); --D: calc(var(--W) * .115); position: relative; width: var(--W); height: var(--H); transform-style: preserve-3d; }
+.dbase { position: absolute; inset: 0; background: linear-gradient(135deg, #22252d, #101218); border: 1px solid rgba(255, 255, 255, .14); border-radius: 2px; box-shadow: 0 30px 70px rgba(0, 0, 0, .5), 0 8px 20px rgba(0, 0, 0, .35); overflow: hidden; }
+.dlid { position: absolute; inset: 0; transform-origin: 0 50%; transform-style: preserve-3d; }
+.lf, .lb { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.lb { transform: rotateY(180deg); background: linear-gradient(135deg, rgba(60, 66, 78, .85), rgba(24, 27, 34, .92)); border: 1px solid rgba(255, 255, 255, .16); border-radius: 2px; }
+.lb .hinge { left: auto; right: 0; }
+
+.dright { min-width: 0; }
+.d-eyebrow { margin: 0; font-size: 12px; letter-spacing: .18em; color: var(--tx2); font-weight: 500; }
+.d-ver { margin: .08em 0 .12em; font: 900 clamp(60px, 9.4vw, 136px)/.98 var(--f-ui); letter-spacing: -.02em; }
+.d-meta { display: flex; flex-wrap: wrap; gap: 12px 34px; margin: 0 0 clamp(18px, 3vh, 30px); padding: 0; }
+.d-meta div { display: grid; gap: 4px; }
+.d-meta dt { font-size: 11px; letter-spacing: .14em; color: var(--tx2); }
+.d-meta dd { margin: 0; font-size: 15px; }
+.chip { display: inline-block; padding: 2px 12px; border-radius: 999px; font-size: 13px; font-weight: 700; border: 1px solid currentColor; }
+.chip.s-major { color: var(--fix); }
+.chip.s-minor { color: var(--chg); }
+.chip.s-fix { color: var(--add); }
+.d-sum { margin: 0 0 clamp(22px, 4vh, 38px); padding-left: 16px; border-left: 3px solid var(--acc, var(--tx2)); font-size: clamp(18px, 1.9vw, 24px); line-height: 1.65; font-weight: 500; }
+.grp { margin: 0 0 6px; }
+.grp h3 { margin: 0; padding-top: 14px; border-top: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
+.grp h3 i { width: 8px; height: 8px; border-radius: 50%; background: currentColor; align-self: center; }
+.grp h3 .gcount { margin-left: auto; font-size: 26px; color: var(--tx); letter-spacing: 0; line-height: 1; }
+.t-a h3 { color: var(--add); } .t-c h3 { color: var(--chg); } .t-f h3 { color: var(--fix); } .t-d h3 { color: var(--del); }
+.grp h3 .gname { color: inherit; }
+.grp ul { list-style: none; margin: 6px 0 22px; padding: 0; }
+.grp li { padding: 9px 0; font-size: 16px; line-height: 1.7; color: var(--tx); border-bottom: 1px dashed var(--line); }
+.grp li:last-child { border-bottom: 0; }
+
+@media (max-width: 759px) {
+  .dwrap { grid-template-columns: minmax(0, 1fr); padding-top: 76px; gap: 28px; }
+  .dcase { --W: min(76vw, 380px); }
+  .d-ver { font-size: clamp(56px, 20vw, 96px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bg, .glow { transition-duration: .01ms; }
+}
+</style>
+<script>
+/* =====================================================================
+   動きの数値（ここを直す）。長さの数値は「ケースの幅」に対する割合
+   ===================================================================== */
+const TUNE = {
+  pull: 0.22,         // 今の1枚を手前へ引き出す量
+  back: 0.10,         // 前後のケースが奥へ逃げる量
+  fall: 0.004,        // 遠いケースほど、1枚ごとにさらに奥へ下がる量
+  sideAngle: 74,      // 背表紙を見せるケースの角度（度）。大きいほど背が正面を向く
+  depth: 0.115,       // ケースの厚み
+  gap: 0.03,          // 中央の1枚と両隣のすき間
+  pitchMargin: 1.14,  // 背表紙どうしの間隔の余裕（1.0で接する）
+  slide: 1.0,         // 中央から隣へ移るときの滑り出し（大きいほど外へ出るのが遅れる）
+  angleSpan: 0.7,     // 傾き終えるまでの距離（枚）。小さいほど早く背表紙を向ける
+  springK: 150,       // ばねの硬さ（ふつうの送り）
+  springZeta: 0.58,   // ばねの粘り。小さいほど行き過ぎて戻る（0.58で約1割行き過ぎる）
+  flyK: 190,          // 「最新へ」・目盛りジャンプのばねの硬さ
+  flyZeta: 0.68,
+  wheel: 0.0055,      // ホイール1pxで動く枚数
+  dragPx: 1.25,       // ドラッグで1枚動く距離（背表紙の間隔に対する倍率）
+  lookahead: 0.14,    // 指を離したあと、勢いで先へ進む秒数
+  wheelIdle: 110,     // ホイールが止まったと見なすまでのms
+  maxVel: 14,         // 勢いの上限（枚/秒）
+  shadeFar: 0.5,      // 隣のケースに重ねる黒の濃さ
+  shadeStep: 0.035,   // 遠いほど足す黒の濃さ
+  fitH: 0.62,         // ケース幅が棚の高さに占める割合の上限
+  fitW: 0.50,         // ケース幅が画面幅に占める割合の上限
+  persp: 4.4,         // 遠近の強さ（ケース幅の何倍の距離から見るか）
+  openMs: 620,        // 開く動きの長さ
+  startAt: 31         // 起動時の位置（1始まり）
+};
+</script>
+
+<div class="bg" id="bg" aria-hidden="true"><div class="glow"></div></div>
+
+<main class="app" id="app">
+  <header class="head">
+    <p class="eyebrow">SAMPLE NOTES</p>
+    <div class="tw" id="tw"><h1 class="ttl" id="ttl">v3.1.1</h1></div>
+    <p class="meta" id="meta"></p>
+  </header>
+
+  <section class="stage" id="stage" tabindex="0" aria-label="バージョンの棚。左右の矢印キーで送り、Enterで開く">
+    <div class="floor" aria-hidden="true"></div>
+    <div class="rack" id="rack" aria-hidden="true"></div>
+    <p class="hint" id="hint"></p>
+  </section>
+
+  <footer class="foot">
+    <div>
+      <div class="scrub" id="scrub" role="slider" tabindex="0" aria-label="バージョンの位置" aria-valuemin="1" aria-valuemax="36" aria-valuenow="31">
+        <div class="ticks" id="ticks"></div>
+      </div>
+      <p class="count mono" id="count">31 / 36</p>
+    </div>
+    <button class="latest" id="latest" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6l6 6-6 6"/><path d="M12 6l6 6-6 6"/><path d="M21 5v14"/></svg>
+      最新へ
+    </button>
+  </footer>
+</main>
+<p class="vh" id="live" aria-live="polite"></p>
+
+<section class="detail" id="detail" hidden role="dialog" aria-modal="true" aria-label="リリースノート" tabindex="-1">
+  <button class="back" id="back" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+    棚に戻る <kbd>Esc</kbd>
+  </button>
+  <div class="dwrap">
+    <div class="dleft"><div class="dcase" id="dcase"><div class="dbase" id="dbase"></div><div class="dlid" id="dlid"></div></div></div>
+    <article class="dright" id="dright"></article>
+  </div>
+</section>
+
+<script>
+/*@pure*/
+/* ------- 版のデータ（ページの中に持つ）。種類 a=追加 c=変更 f=修正 d=削除 ------- */
+const RAW = [
+['1.0.0','2023-04-12','Sample Notes の最初の公開版。メモを書いて、探して、手元に残せる。',[
+ ['a','メモの作成・編集・削除'],['a','一覧からのキーワード検索'],['a','フォルダでメモを分けられる'],['a','文字サイズを小・中・大から選べる'],['a','ライト・ダークの表示切り替え'],['a','メモは端末の中だけに保存される']]],
+['1.0.1','2023-04-28','公開直後に見つかった不具合を直した。',[
+ ['f','長いメモを開くと入力欄が固まることがある不具合を直した'],['f','フォルダ名に絵文字を使うと一覧が崩れる不具合を直した'],['f','検索で全角スペースが無視される不具合を直した']]],
+['1.0.2','2023-05-19','起動と保存まわりの不具合を直した。',[
+ ['f','アプリを閉じる直前の入力が保存されないことがある不具合を直した'],['f','ダークモードで検索欄の文字が読みにくい所を直した'],['c','起動時の読み込みを少し速くした']]],
+['1.1.0','2023-06-14','メモに色のラベルを付けて、見分けやすくなった。',[
+ ['a','メモに色のラベルを付けられる'],['a','ラベルの色で一覧を絞り込める'],['a','メモを一覧の上に固定できる（ピン留め）'],['c','一覧の行間を広げ、2行目まで内容を見せるようにした'],['f','削除したメモが一瞬だけ一覧に残る不具合を直した']]],
+['1.1.1','2023-07-03','ラベルまわりの小さな不具合を直した。',[
+ ['f','ラベルを外してもピン留めの並びが戻らない不具合を直した'],['f','ラベルで絞り込み中に新規メモを作ると一覧に出ない不具合を直した'],['f','横向きにしたときラベルの色選びがはみ出す所を直した']]],
+['1.2.0','2023-08-09','ごみ箱が付いて、消したメモを30日は戻せるようになった。',[
+ ['a','ごみ箱（削除したメモを30日間保管）'],['a','ごみ箱から1件ずつ、またはまとめて元に戻せる'],['c','削除の確認画面の文言をわかりやすくした'],['c','並び順を「更新日」「作成日」から選べるようにした'],['f','深夜0時前後に日付がずれて表示される不具合を直した']]],
+['1.2.1','2023-08-25','ごみ箱の表示と動きの不具合を直した。',[
+ ['f','ごみ箱を空にしたあとも件数の表示が残る不具合を直した'],['f','30日を過ぎたメモが消えずに残ることがある不具合を直した'],['f','復元したメモのラベルが外れる不具合を直した']]],
+['1.3.0','2023-10-04','書式が使えて、メモの見た目を整えられる。',[
+ ['a','見出し・箇条書き・太字を使える'],['a','チェックリスト（完了すると取り消し線）'],['a','書式を付けるツールバーをキーボードの上に表示'],['c','入力中の自動保存を5秒ごとから1秒ごとに変更'],['c','検索結果で一致した語を目立たせる']]],
+['1.3.1','2023-10-20','チェックリストと書式の不具合を直した。',[
+ ['f','チェックを入れた項目を消すと次の行が崩れる不具合を直した'],['f','箇条書きの途中で改行すると番号が飛ぶ不具合を直した'],['f','一部の端末でツールバーが入力欄に重なる不具合を直した']]],
+['1.4.0','2023-12-06','ほかの端末と同期できるようになった。',[
+ ['a','アカウントを作ってメモを同期できる'],['a','同期の状態（同期中・完了・失敗）を画面の上に表示'],['a','同期がぶつかったとき、新しい方を残すか選べる'],['c','初回起動時の案内を3画面から2画面に減らした'],['c','設定画面を「表示」「同期」「その他」に整理した']]],
+['1.4.1','2023-12-21','同期が失敗しやすかった所を直した。',[
+ ['f','通信が不安定なとき同期が止まったままになる不具合を直した'],['f','同期後にラベルの色が初期値に戻ることがある不具合を直した'],['f','機内モードを解除しても同期が再開しない不具合を直した']]],
+['1.5.0','2024-02-07','写真を貼れて、メモが記録帳としても使いやすくなった。',[
+ ['a','メモに写真を貼り付けられる（1件につき10枚まで）'],['a','写真をタップして全画面で見られる'],['a','カメラで撮ってそのまま貼れる'],['c','写真を貼ったメモは一覧にサムネイルを表示'],['c','同期を速くした（写真は後から順に送る）'],['f','長い日本語の文章で改行の位置がずれる不具合を直した']]],
+['1.5.1','2024-02-22','写真まわりの不具合を直した。',[
+ ['f','写真を貼ったメモの容量が実際より大きく数えられる不具合を直した'],['f','縦向きの写真が横向きで貼られることがある不具合を直した'],['f','写真を削除してもサムネイルが残る不具合を直した']]],
+['1.6.0','2024-04-10','ウィジェットと共有で、思いついた瞬間にメモを取れる。',[
+ ['a','ホーム画面のウィジェットから新規メモを作れる'],['a','最近のメモ3件を見せるウィジェット'],['a','共有メニューから「Sample Notes に追加」できる'],['c','新規メモの作成が約0.3秒速くなった'],['c','画面の端をスワイプして前のメモに戻れるようにした'],['f','日付が変わったあともウィジェットが古い表示のままになる不具合を直した']]],
+['1.6.1','2024-04-26','ウィジェットまわりの小さな不具合を直した。',[
+ ['f','ウィジェットをタップしても起動しないことがある不具合を直した'],['f','共有メニューから追加したメモの題名が空になる不具合を直した'],['f','ダークモードでウィジェットの背景が白く見える不具合を直した']]],
+['2.0.0','2024-06-18','画面を一新し、メモを「ノートブック」で整理できるようになった大きな更新。',[
+ ['a','ノートブック（フォルダの上の階層）を追加'],['a','メモ同士をリンクでつなげられる'],['a','全メモが対象の高速な検索（貼った写真の文字も探せる）'],['c','画面のデザインを全面的に刷新'],['c','これまでのフォルダはノートブックの中へ自動で移行'],['c','起動にかかる時間を約40%短縮'],['d','メモを日付順に並べるだけの旧一覧画面を廃止']]],
+['2.0.1','2024-07-02','2.0.0 への移行まわりの不具合を直した。',[
+ ['f','旧版から移行したメモが重複して表示される不具合を直した'],['f','ノートブックの名前を変えると一覧が空になる不具合を直した'],['f','リンク先のメモを消すとアプリが落ちることがある不具合を直した'],['f','旧版の背景色の設定が引き継がれない不具合を直した']]],
+['2.1.0','2024-08-14','メモ同士のつながりが見やすくなった。',[
+ ['a','メモの下に「このメモにつながるメモ」を表示'],['a','リンクを入力している途中で候補を出す'],['c','リンクの見た目をアンダーラインから薄い背景に変更'],['c','検索結果にノートブック名を表示'],['f','同じ名前のメモにリンクすると別のメモが開く不具合を直した']]],
+['2.1.1','2024-08-30','リンクと検索の小さな不具合を直した。',[
+ ['f','リンクの候補が閉じずに残ることがある不具合を直した'],['f','検索の履歴が重複して並ぶ不具合を直した'],['f','タブレットでリンクの一覧が画面からはみ出す不具合を直した']]],
+['2.2.0','2024-10-16','ひとつのメモを、ほかの人と一緒に編集できる。',[
+ ['a','共有リンクで招待して、メモを共同編集できる'],['a','相手が編集している場所にカーソルと名前を表示'],['a','共有を「閲覧のみ」にもできる'],['c','共有中のメモに「共有」のバッジを表示'],['c','通知の文面を短く読みやすくした'],['f','同じ通知が2回届くことがある不具合を直した']]],
+['2.2.1','2024-11-01','共同編集の不具合を直した。',[
+ ['f','2人が同時に入力すると文字が入れ替わることがある不具合を直した'],['f','共有を解除したあとも相手の一覧に残る不具合を直した'],['f','通知をオフにしても共有の通知だけ届く不具合を直した']]],
+['2.3.0','2024-12-11','テンプレートで、よく書くメモをすぐ作れる。',[
+ ['a','議事録・日記・買い物リストなど10種類のテンプレート'],['a','自分のメモをテンプレートとして登録できる'],['a','新規メモを作るときにテンプレートを選べる'],['c','新規メモ画面の最初の表示を「空白」から「テンプレート選択」に変更'],['c','設定の「その他」にあった項目を「データ」に分けた'],['d','試験的に置いていた「ひと言メモ」画面を終了']]],
+['2.3.1','2025-01-08','テンプレートの不具合を直した。',[
+ ['f','自作テンプレートを編集すると元のメモも変わる不具合を直した'],['f','テンプレートの日付欄が前日になることがある不具合を直した'],['f','テンプレート一覧の並びが入れ替わる不具合を直した']]],
+['2.4.0','2025-02-19','リマインダーで、メモから予定を思い出せる。',[
+ ['a','メモに日時を決めて通知を設定できる'],['a','毎日・毎週・毎月のくり返し'],['a','期限が過ぎたリマインダーを一覧で確認できる'],['c','通知の音を5種類から選べるようにした'],['c','カレンダー表示で、期日のあるメモに点を表示'],['f','12時間表記で午前と午後が逆に設定される不具合を直した']]],
+['2.4.1','2025-03-06','リマインダーの不具合を直した。',[
+ ['f','端末の時刻設定を変えると通知がずれる不具合を直した'],['f','くり返しの通知が月末に飛ばされる不具合を直した'],['f','通知をタップしても対象のメモが開かない不具合を直した']]],
+['2.5.0','2025-04-23','手書きとスケッチが書けるようになった。',[
+ ['a','ペンで手書きのメモを書ける'],['a','太さと色を選べる3種類のペン'],['a','手書きを画像として書き出せる'],['c','消しゴムを「全部消す」と「線だけ消す」から選べるようにした'],['c','一覧に手書きメモのプレビューを表示'],['f','手書きと文字を混ぜたメモで改行の位置がずれる不具合を直した']]],
+['2.5.1','2025-05-09','手書きの不具合を直した。',[
+ ['f','ペンの色が切り替わらないことがある不具合を直した'],['f','手書きメモの同期で線が欠ける不具合を直した'],['f','長く書き続けると動作が重くなる不具合を直した']]],
+['3.0.0','2025-07-15','AI要約と新しい同期の仕組みを備えた、2度目の大きな更新。',[
+ ['a','メモの内容を3行にまとめるAI要約'],['a','長いメモに目次を自動で付ける'],['a','変更した部分だけを送る新しい同期の仕組み'],['c','同期が最大5倍速くなり、通信量が約7割減った'],['c','画面全体の文字の大きさと余白を見直した'],['f','1万件以上のメモがあると検索が遅くなる不具合を直した'],['d','旧バージョンの同期方式を終了']]],
+['3.0.1','2025-07-29','3.0.0 の同期まわりの不具合を直した。',[
+ ['f','旧同期から移行している途中でメモが二重に出る不具合を直した'],['f','AI要約が英語で出ることがある不具合を直した'],['f','目次をタップしても該当の位置へ移動しない不具合を直した']]],
+['3.1.0','2025-09-10','文字起こしで、声からメモが作れる。',[
+ ['a','録音して自動で文字起こしできる'],['a','話している人ごとに文を分けて表示'],['a','文字起こしをそのままAI要約にかけられる'],['c','録音中の画面を見やすくした'],['c','長い録音は5分ごとに区切って保存するようにした'],['f','録音を止めた直後にアプリが落ちることがある不具合を直した']]],
+['3.1.1','2025-09-24','文字起こしの不具合を直した。',[
+ ['f','通話中に録音すると音が途切れる不具合を直した'],['f','文字起こしの時刻が実際より1時間ずれる不具合を直した'],['f','録音を削除しても容量が減らない不具合を直した']]],
+['3.2.0','2025-11-12','ロック画面とウィジェットから、すぐに書き始められる。',[
+ ['a','ロック画面から新規メモを開くボタン'],['a','ピン留めしたメモを並べる大きいウィジェット'],['a','画面を2つに分けて、メモを見ながら書ける（タブレット）'],['c','ウィジェットの更新頻度を上げた'],['c','起動直後に入力欄を開くかどうかを選べるようにした'],['f','ウィジェットの文字が途中で切れる不具合を直した']]],
+['3.2.1','2025-12-03','分割表示とロック画面まわりの不具合を直した。',[
+ ['f','分割表示を回転すると左右が入れ替わる不具合を直した'],['f','ロック画面のボタンから開くとキーボードが出ない不具合を直した'],['f','ピン留めウィジェットの並びが元に戻る不具合を直した']]],
+['3.3.0','2026-02-18','書き出しとバックアップが強くなった。',[
+ ['a','PDF・Markdown・テキストでメモを書き出せる'],['a','週に1回の自動バックアップ'],['a','バックアップからの復元'],['c','書き出すとき、ノートブックごとにフォルダを作る'],['c','設定の「データ」画面を整理した'],['d','古い書き出し形式（.snote）の新規作成を終了']]],
+['3.4.0','2026-06-10','検索が賢くなり、言い回しが違っても見つかる。',[
+ ['a','意味で探す検索（言い回しが違っても見つかる）'],['a','検索結果にメモの該当箇所を表示'],['a','よく使う絞り込み条件を保存できる'],['c','検索結果が出るまでの時間を半分にした'],['c','検索欄を画面の下に移した'],['f','日付で絞り込むと件数が合わない不具合を直した']]],
+['3.5.0','2026-10-14','最新版。メモの整理を手伝い、見た目も少し整った。',[
+ ['a','似たメモをまとめて整理する提案'],['a','週ごとのふりかえりを自動で作る'],['c','ラベルの色を24色に増やした'],['c','起動時のアニメーションを短くした'],['f','共有メモの「閲覧のみ」の相手が編集できてしまう不具合を直した']]]
+];
+
+const SIZE_LABEL = { major: '大きな更新', minor: '小さな更新', fix: '不具合の修正' };
+const TYPE_LABEL = { a: '追加', c: '変更', f: '修正', d: '削除' };
+const TYPE_ORDER = ['a', 'c', 'f', 'd'];
+
+const VERS = RAW.map(([ver, date, sum, ch]) => {
+  const p = ver.split('.').map(Number);
+  const size = (p[1] === 0 && p[2] === 0) ? 'major' : (p[2] === 0 ? 'minor' : 'fix');
+  return { ver, p, date, sum, ch, size, owner: '開発チーム' };
+});
+const N = VERS.length;
+
+/* ------- 計算（画面から切り離した、同じ入力なら同じ結果になる関数） ------- */
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const smooth = t => t * t * (3 - 2 * t);
+
+/* 棚の寸法。W=ケース幅(px) */
+function rackGeom(W, t) {
+  const D = W * t.depth, th = t.sideAngle * Math.PI / 180, s = Math.sin(th), c = Math.cos(th);
+  const ext = (W / 2) * c + (D / 2) * s;            // 傾けたケースが横に張り出す量
+  return { W, H: W * 0.9, D, th, X0: W / 2 + ext + W * t.gap, pitch: D / s * t.pitchMargin,
+           pull: t.pull * W, back: t.back * W, fall: t.fall * W };
+}
+/* 傾いたケースの表（ガラス面）は、背表紙の邪魔になるので傾くほど薄くする */
+function frontOpacity(rotDeg) { return 1 - smooth(clamp((Math.abs(rotDeg) - 28) / 30, 0, 1)); }
+/* ずれの量 d（今の位置から何枚離れているか。小数）→ 位置・角度・奥行き・暗さ */
+function rackLayout(d, g, t) {
+  const s = Math.abs(d), sg = d < 0 ? -1 : 1, u = Math.min(s, 1), e = smooth(u);
+  const x = s < 1 ? g.X0 * Math.pow(smooth(s), t.slide) : g.X0 + (s - 1) * g.pitch;
+  const a = g.th * smooth(clamp(s / t.angleSpan, 0, 1));
+  const z = g.pull * (1 - e) - g.back * e - Math.max(0, s - 1) * g.fall;
+  const shade = clamp(t.shadeFar * e + Math.max(0, s - 1) * t.shadeStep, 0, 0.86);
+  return { x: sg * x, z, rot: sg * a * 180 / Math.PI, shade };
+}
+/* 止まる位置：勢いを少し先まで見て、いちばん近い1枚に吸い付く */
+function snapTarget(pos, vel, n, t) {
+  return clamp(Math.round(pos + clamp(vel, -t.maxVel, t.maxVel) * t.lookahead), 0, n - 1);
+}
+/* ばねの1歩 */
+function springStep(pos, vel, target, dt, k, zeta) {
+  const c = 2 * Math.sqrt(k) * zeta;
+  const v = vel + (-k * (pos - target) - c * vel) * dt;
+  return { pos: pos + v * dt, vel: v };
+}
+/* スクラバーの横位置(0〜1) → 何番目か */
+function tickIndex(ratio, n) { return clamp(Math.round(ratio * (n - 1)), 0, n - 1); }
+
+/* ------- 色 ------- */
+function hslToRgb(h, s, l) {
+  h = ((h % 360) + 360) % 360; s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+}
+function relLum([r, g, b]) {
+  const f = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+}
+function contrastOf(l1, l2) { const a = Math.max(l1, l2), b = Math.min(l1, l2); return (a + 0.05) / (b + 0.05); }
+/* 文字色 fgLum に対して minRatio 以上になるまで暗くする。戻り値は明るさ(%) */
+function darkenFor(h, s, l, fgLum, minRatio) {
+  while (l > 3 && contrastOf(fgLum, relLum(hslToRgb(h, s, l))) < minRatio) l -= 0.5;
+  return l;
+}
+const LUM_TX2 = relLum([0xA6, 0xAC, 0xB8]);
+const LUM_WHITE = 1;
+/* 版の番号 → 色。大きな更新ごとに系統が変わり、小さな更新で色相が少しずつ進む */
+function hueOf(p) {
+  const base = { 1: 208, 2: 152, 3: 276 }[p[0]] ?? (p[0] * 70) % 360;
+  return (base + p[1] * 8 + p[2] * 3) % 360;
+}
+function coverColors(p) {
+  const h = hueOf(p);
+  const l1 = darkenFor(h, 64, 46, LUM_WHITE, 4.6);
+  const l2 = darkenFor(h + 18, 62, 32, LUM_WHITE, 4.6);
+  return { h, c1: `hsl(${h} 64% ${l1}%)`, c2: `hsl(${(h + 18) % 360} 62% ${l2}%)`, s1: `hsl(${h} 46% 24%)`, s2: `hsl(${(h + 10) % 360} 44% 12%)` };
+}
+/* 背景の3色＋中央のにじみ。文字(#A6ACB8)に対して 4.5:1 以上を保つ。にじみは文字の乗らない中央だけ明るくてよい */
+function bgColors(p) {
+  const h = hueOf(p);
+  const mk = (hh, s, l0) => { const l = darkenFor(hh, s, l0, LUM_TX2, 4.6); return { css: `hsl(${(hh + 360) % 360} ${s}% ${l}%)`, rgb: hslToRgb(hh, s, l), l }; };
+  const a = mk(h, 70, 36), b = mk(h + 34, 62, 30), c = mk(h - 28, 58, 26);
+  return { a: a.css, b: b.css, c: c.css, g: `hsl(${h} 72% 36%)`, lums: [a, b, c].map(x => relLum(x.rgb)) };
+}
+/*@end*/
+</script>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const app = $('app'), stage = $('stage'), rack = $('rack'), ttlWrap = $('tw'), meta = $('meta'),
+        scrub = $('scrub'), ticksEl = $('ticks'), countEl = $('count'), latestBtn = $('latest'),
+        bgEl = $('bg'), live = $('live'), hint = $('hint'),
+        detail = $('detail'), dcase = $('dcase'), dbase = $('dbase'), dlid = $('dlid'), dright = $('dright'), backBtn = $('back');
+  let ttl = $('ttl');
+  const root = document.documentElement;
+
+  const mq = matchMedia('(prefers-reduced-motion: reduce)');
+  let reduce = mq.matches;
+  mq.addEventListener?.('change', e => { reduce = e.matches; });
+  hint.textContent = matchMedia('(pointer: coarse)').matches ? '中央の1枚をタップで開く' : '中央の1枚をクリック、または Enter で開く';
+
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  /* ---------- 表紙・背表紙・ケースの中身 ---------- */
+  const COVER = VERS.map(v => coverColors(v.p));
+  const artStyle = i => `--c1:${COVER[i].c1};--c2:${COVER[i].c2}`;
+  function artHTML(i) {
+    const v = VERS[i], big = v.size === 'major';
+    return `<div class="art" style="${artStyle(i)}"><div class="lines"></div><div class="orb"></div>` +
+      (big ? '<div class="ring"></div><div class="ring r2"></div>' : '') +
+      `<div class="cap">Sample Notes · v${v.ver}</div><div class="num">${v.p[0]}.${v.p[1]}</div></div>`;
+  }
+  const frontHTML = i => `<div class="cf"><div class="hinge"></div>${artHTML(i)}<i class="gloss"></i></div>`;
+  const spineHTML = i => `<div class="spt"><b>Sample Notes</b><span>v${VERS[i].ver}</span></div>`;
+  function faces(i) {
+    const sp = spineHTML(i);
+    return `<div class="face front"><div class="fc">${frontHTML(i)}<i class="shade"></i></div></div>` +
+           `<div class="face sp sl"><div class="fc">${sp}<i class="shade"></i></div></div>` +
+           `<div class="face sp sr"><div class="fc">${sp}<i class="shade"></i></div></div>`;
+  }
+  function buildCase(i) {
+    const el = document.createElement('div');
+    el.className = 'case'; el.dataset.i = i;
+    el.style.cssText = `--c1:${COVER[i].c1};--s1:${COVER[i].s1};--s2:${COVER[i].s2}`;
+    el.innerHTML = `<div class="box main">${faces(i)}</div><div class="box refl" aria-hidden="true">${faces(i)}</div>`;
+    return el;
+  }
+
+  /* ---------- 状態 ---------- */
+  const S = { pos: TUNE.startAt - 1, vel: 0, target: TUNE.startAt - 1, direct: false, fly: false, zFly: TUNE.flyZeta };
+  let G = rackGeom(300, TUNE), R = 8, curIdx = -1, view = 'rack', stageW = 0, stageH = 0;
+  const live_ = new Map();
+
+  /* ---------- 大きさ ---------- */
+  function measure() {
+    stageW = stage.clientWidth; stageH = stage.clientHeight;
+    const W = clamp(Math.min(stageH * TUNE.fitH, stageW * TUNE.fitW), 120, 440);
+    G = rackGeom(W, TUNE);
+    const cy = Math.max(G.H / 2 + 10, (stageH - G.H * 1.36) / 2 + G.H / 2);
+    stage.style.setProperty('--W', G.W.toFixed(1) + 'px');
+    stage.style.setProperty('--H', G.H.toFixed(1) + 'px');
+    stage.style.setProperty('--D', G.D.toFixed(1) + 'px');
+    stage.style.setProperty('--cy', cy.toFixed(1) + 'px');
+    stage.style.setProperty('--persp', (G.W * TUNE.persp).toFixed(0) + 'px');
+    R = clamp(Math.ceil((stageW / 2 + G.W * 0.2 - G.X0) / G.pitch) + 2, 3, 15);
+  }
+
+  /* ---------- 描く ---------- */
+  const tickEls = [];
+  for (let i = 0; i < N; i++) { const t = document.createElement('i'); ticksEl.appendChild(t); tickEls.push(t); }
+  const tickK = new Array(N).fill(-1);
+
+  /* 重なりの描き順：外側ほど後（上）、中央の1枚をいちばん上に */
+  let orderIdx = -1;
+  function orderDom(idx) {
+    [...live_.keys()].sort((a, b) => (a === idx ? 1e9 : Math.abs(a - idx)) - (b === idx ? 1e9 : Math.abs(b - idx)))
+      .forEach(i => rack.appendChild(live_.get(i)));
+  }
+  function render() {
+    const idx = clamp(Math.round(S.pos), 0, N - 1);
+    if (idx !== curIdx) setIndex(idx);
+    const lo = Math.max(0, idx - R), hi = Math.min(N - 1, idx + R);
+    for (const [i, el] of live_) if (i < lo || i > hi) { el.remove(); live_.delete(i); }
+    let added = false;
+    for (let i = lo; i <= hi; i++) {
+      let el = live_.get(i);
+      if (!el) { el = buildCase(i); live_.set(i, el); rack.appendChild(el); added = true; }
+      const L = rackLayout(i - S.pos, G, TUNE);
+      el.style.transform = `translate3d(${L.x.toFixed(2)}px,0,${L.z.toFixed(2)}px) rotateY(${L.rot.toFixed(3)}deg)`;
+      el.style.setProperty('--shade', L.shade.toFixed(3));
+      el.style.setProperty('--fo', frontOpacity(L.rot).toFixed(3));
+    }
+    if (added || idx !== orderIdx) { orderIdx = idx; orderDom(idx); }
+    for (let i = 0; i < N; i++) {
+      const k = Math.pow(Math.max(0, 1 - Math.abs(i - S.pos) / 2.4), 2);
+      const kk = Math.round(k * 200) / 200;
+      if (kk !== tickK[i]) { tickK[i] = kk; tickEls[i].style.setProperty('--k', kk); }
+    }
+  }
+
+  /* ---------- 版が変わったとき ---------- */
+  let lastBg = -1;
+  function setBg(i) {
+    const c = bgColors(VERS[i].p);
+    bgEl.style.setProperty('--bg-a', c.a); bgEl.style.setProperty('--bg-b', c.b);
+    bgEl.style.setProperty('--bg-c', c.c); bgEl.style.setProperty('--bg-g', c.g);
+  }
+  function titleText(v) { return 'v' + v.ver; }
+  function setIndex(i) {
+    const first = curIdx < 0;
+    curIdx = i;
+    const v = VERS[i];
+    countEl.textContent = `${i + 1} / ${N}`;
+    scrub.setAttribute('aria-valuenow', i + 1);
+    live.textContent = `v${v.ver}、${v.date}、${SIZE_LABEL[v.size]}`;
+    latestBtn.disabled = (i === N - 1 && S.target === N - 1);
+    setBg(i);
+    if (first) { ttl.textContent = titleText(v); } else swapTitle(titleText(v));
+    meta.innerHTML = `<span class="mono">${v.date}</span><span class="sep">・</span><span>変更 <span class="mono">${v.ch.length}</span>件</span><span class="sep">・</span><span>${SIZE_LABEL[v.size]}</span>`;
+    if (!first && !reduce) meta.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'none' }], { duration: 240, easing: 'cubic-bezier(.2,.9,.25,1)' });
+  }
+  /* 題名：上へ抜けて、下から入る（切らない・中央から動かさない） */
+  function swapTitle(text) {
+    if (reduce) { ttl.textContent = text; return; }
+    const fast = Math.abs(S.vel) > 6;
+    if (!fast) {
+      const ghost = ttl.cloneNode(true);
+      ghost.removeAttribute('id'); ghost.setAttribute('aria-hidden', 'true');
+      ttlWrap.appendChild(ghost);
+      while (ttlWrap.children.length > 4) ttlWrap.children[1].remove();
+      ghost.animate([{ transform: 'translateY(0)', opacity: 1 }, { transform: 'translateY(-64%)', opacity: 0 }],
+        { duration: 190, easing: 'cubic-bezier(.4,0,.8,.4)', fill: 'forwards' }).onfinish = () => ghost.remove();
+    }
+    ttl.textContent = text;
+    ttl.animate([{ transform: 'translateY(58%)', opacity: 0 }, { transform: 'translateY(0)', opacity: 1 }],
+      { duration: 270, easing: 'cubic-bezier(.2,.9,.25,1)' });
+  }
+
+  /* ---------- ばねの動きの輪 ---------- */
+  let raf = 0, last = 0;
+  function kick() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame); } }
+  function frame(now) {
+    raf = 0;
+    const dt = Math.min(0.033, Math.max(0.001, (now - last) / 1000)); last = now;
+    let moving = S.direct;
+    if (!S.direct) {
+      const k = S.fly ? TUNE.flyK : TUNE.springK, z = S.fly ? S.zFly : TUNE.springZeta;
+      const sub = Math.ceil(dt / (1 / 240)), h = dt / sub;
+      for (let n = 0; n < sub; n++) { const r = springStep(S.pos, S.vel, S.target, h, k, z); S.pos = r.pos; S.vel = r.vel; }
+      S.pos = clamp(S.pos, -0.6, N - 0.4);
+      if (Math.abs(S.target - S.pos) < 0.0008 && Math.abs(S.vel) < 0.01) { S.pos = S.target; S.vel = 0; S.fly = false; }
+      else moving = true;
+    }
+    render();
+    if (moving) kick();
+    else latestBtn.disabled = (curIdx === N - 1);
+  }
+  function goTo(i, fly) {
+    i = clamp(Math.round(i), 0, N - 1);
+    /* 遠くへ飛ぶときは行き過ぎが大きくなるので、距離に応じて粘りを足す */
+    S.zFly = clamp(TUNE.flyZeta + 0.04 * Math.max(0, Math.abs(i - S.pos) - 1), TUNE.flyZeta, 1);
+    S.target = i; S.direct = false; S.fly = !!fly;
+    if (reduce) { S.pos = i; S.vel = 0; S.fly = false; render(); latestBtn.disabled = (i === N - 1); return; }
+    kick();
+  }
+  const step = n => goTo((S.direct ? Math.round(S.pos) : S.target) + n, false);
+
+  /* ---------- 入力：ホイール ---------- */
+  let wheelTimer = 0, racc = 0;
+  function pushDelta(items) {
+    if (reduce) { racc += items; if (Math.abs(racc) >= 0.5) { step(Math.sign(racc)); racc = 0; } return; }
+    if (!S.direct) { S.direct = true; S.vel = 0; }
+    let np = S.pos + items;
+    if (np < 0 || np > N - 1) np = S.pos + items * 0.35; // 端では重く
+    S.pos = clamp(np, -0.5, N - 0.5);
+    kick();
+  }
+  function release() {
+    if (!S.direct) return;
+    S.direct = false; S.fly = false;
+    S.target = snapTarget(S.pos, S.vel, N, TUNE);
+    kick();
+  }
+  stage.addEventListener('wheel', e => {
+    if (view !== 'rack') return;
+    e.preventDefault();
+    const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    const px = raw * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1);
+    const t = performance.now();
+    const items = px * TUNE.wheel;
+    if (!S.direct) S.vel = 0;
+    else { const dtw = Math.max(0.016, (t - (stage._wt || t)) / 1000); S.vel = S.vel * 0.6 + (items / dtw) * 0.4; }
+    stage._wt = t;
+    pushDelta(items);
+    clearTimeout(wheelTimer); wheelTimer = setTimeout(release, TUNE.wheelIdle);
+  }, { passive: false });
+
+  /* ---------- 入力：ドラッグ・タップ ---------- */
+  let drag = null;
+  stage.addEventListener('pointerdown', e => {
+    if (view !== 'rack' || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    drag = { id: e.pointerId, x0: e.clientX, x: e.clientX, t: performance.now(), pos0: S.pos, moved: false, el: e.target };
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x0;
+    if (!drag.moved) {
+      if (Math.abs(dx) < 6) return;
+      drag.moved = true; stage.setPointerCapture?.(e.pointerId); stage.classList.add('dragging');
+      S.vel = 0; if (!reduce) S.direct = true; drag.pos0 = S.pos; drag.x0 = e.clientX; drag.x = e.clientX; drag.t = performance.now(); drag.acc = 0;
+      return;
+    }
+    const pxPer = Math.max(18, G.pitch * TUNE.dragPx);
+    const now = performance.now(), dtm = Math.max(0.008, (now - drag.t) / 1000);
+    const items = -(e.clientX - drag.x) / pxPer;
+    if (reduce) { drag.acc += items; if (Math.abs(drag.acc) >= 0.5) { step(Math.sign(drag.acc)); drag.acc = 0; } }
+    else {
+      S.vel = S.vel * 0.65 + (items / dtm) * 0.35;
+      let np = S.pos + items;
+      if (np < 0 || np > N - 1) np = S.pos + items * 0.35;
+      S.pos = clamp(np, -0.5, N - 0.5); kick();
+    }
+    drag.x = e.clientX; drag.t = now;
+  });
+  const fadeHint = () => hint.classList.add('gone');
+  ['wheel', 'pointerdown', 'keydown'].forEach(t => document.addEventListener(t, fadeHint, { once: true, passive: true }));
+  const endDrag = e => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag; drag = null; stage.classList.remove('dragging');
+    if (d.moved) { if (e.type === 'pointerup') release(); else release(); return; }
+    if (e.type !== 'pointerup') return;
+    const c = d.el.closest && d.el.closest('.case');
+    if (!c || c.closest('.refl')) return;
+    const i = +c.dataset.i;
+    if (i === curIdx && Math.abs(S.pos - i) < 0.35) openDetail(); else goTo(i, false);
+  };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+
+  /* ---------- 入力：スクラバー・最新へ ---------- */
+  let sdrag = false;
+  const scrubTo = e => {
+    const r = ticksEl.getBoundingClientRect();
+    goTo(tickIndex((e.clientX - r.left) / r.width, N), true);
+  };
+  scrub.addEventListener('pointerdown', e => { if (view !== 'rack') return; sdrag = true; scrub.setPointerCapture?.(e.pointerId); scrubTo(e); });
+  scrub.addEventListener('pointermove', e => { if (sdrag) scrubTo(e); });
+  const sEnd = () => { sdrag = false; };
+  scrub.addEventListener('pointerup', sEnd); scrub.addEventListener('pointercancel', sEnd);
+  latestBtn.addEventListener('click', () => { if (view === 'rack') goTo(N - 1, true); });
+
+  /* ---------- 入力：キー ---------- */
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { if (view === 'detail' || view === 'opening') { e.preventDefault(); closeDetail(); } return; }
+    if (view !== 'rack') return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+    else if (e.key === 'Home') { e.preventDefault(); goTo(0, true); }
+    else if (e.key === 'End') { e.preventDefault(); goTo(N - 1, true); }
+    else if ((e.key === 'Enter' || e.key === ' ') && !(e.target.closest && e.target.closest('button'))) {
+      e.preventDefault(); openDetail();
+    }
+  });
+
+  /* ---------- 1枚を開く ---------- */
+  function fillDetail(i) {
+    const v = VERS[i], cc = COVER[i];
+    dcase.style.cssText = `--c1:${cc.c1};--c2:${cc.c2}`;
+    dbase.innerHTML = `<div class="hinge"></div>${artHTML(i)}`;
+    dlid.innerHTML = `<div class="lf">${frontHTML(i)}</div><div class="lb"><div class="hinge"></div></div>`;
+    const groups = TYPE_ORDER.map(t => {
+      const items = v.ch.filter(c => c[0] === t);
+      if (!items.length) return '';
+      return `<section class="grp t-${t}"><h3><i></i><span class="gname">${TYPE_LABEL[t]}</span><span class="gcount mono">${String(items.length).padStart(2, '0')}</span></h3><ul>${items.map(c => `<li>${esc(c[1])}</li>`).join('')}</ul></section>`;
+    }).join('');
+    dright.style.setProperty('--acc', `hsl(${cc.h} 70% 62%)`);
+    dright.innerHTML =
+      `<p class="d-eyebrow">SAMPLE NOTES ・ リリースノート</p>` +
+      `<h2 class="d-ver">v${v.ver}</h2>` +
+      `<dl class="d-meta"><div><dt>公開日</dt><dd class="mono">${v.date}</dd></div>` +
+      `<div><dt>更新の大きさ</dt><dd><span class="chip s-${v.size}">${SIZE_LABEL[v.size]}</span></dd></div>` +
+      `<div><dt>担当</dt><dd>${esc(v.owner)}</dd></div></dl>` +
+      `<p class="d-sum">${esc(v.sum)}</p>${groups}`;
+  }
+  const centerFront = () => { const el = live_.get(curIdx); return el && el.querySelector('.main .front'); };
+  const blocks = () => dright.querySelectorAll('.d-eyebrow,.d-ver,.d-meta,.d-sum,.grp');
+  const EASE = 'cubic-bezier(.2,.9,.25,1)';
+  let wantClose = false;
+  const done = a => a.finished.catch(() => {});
+
+  async function openDetail() {
+    if (view !== 'rack') return;
+    if (S.direct) release();
+    if (Math.abs(S.pos - curIdx) > 0.01) { S.pos = curIdx; S.target = curIdx; S.vel = 0; render(); }
+    view = 'opening'; wantClose = false;
+    const i = curIdx;
+    const fr = centerFront();
+    const r0 = fr ? fr.getBoundingClientRect() : null;
+    fillDetail(i);
+    detail.hidden = false; detail.scrollTop = 0; root.classList.add('is-detail');
+    app.inert = true;
+    if (reduce || !r0) {
+      app.style.visibility = 'hidden'; view = 'detail'; backBtn.focus({ preventScroll: true }); return;
+    }
+    const r1 = dcase.getBoundingClientRect();
+    const sc = r0.width / r1.width;
+    const dx = (r0.left + r0.width / 2) - (r1.left + r1.width / 2), dy = (r0.top + r0.height / 2) - (r1.top + r1.height / 2);
+    const T = TUNE.openMs;
+    const anims = [];
+    anims.push(dcase.animate([{ transform: `translate(${dx}px,${dy}px) scale(${sc})` }, { transform: 'none' }], { duration: T * 0.6, easing: EASE, fill: 'both' }));
+    anims.push(dlid.animate([
+      { transform: 'rotateY(0deg)', opacity: 1, offset: 0 },
+      { transform: 'rotateY(-118deg)', opacity: 1, offset: 0.78 },
+      { transform: 'rotateY(-160deg)', opacity: 0, offset: 1 }],
+      { duration: T * 0.72, delay: T * 0.28, easing: 'cubic-bezier(.45,0,.2,1)', fill: 'both' }));
+    anims.push(app.animate([{ opacity: 1 }, { opacity: 0 }], { duration: T * 0.42, delay: T * 0.08, easing: 'ease-out', fill: 'forwards' }));
+    anims.push(backBtn.animate([{ opacity: 0, transform: 'translateX(-8px)' }, { opacity: 1, transform: 'none' }], { duration: 300, delay: T * 0.5, easing: EASE, fill: 'both' }));
+    [...blocks()].forEach((b, n) => anims.push(b.animate([{ opacity: 0, transform: 'translateY(22px)' }, { opacity: 1, transform: 'none' }],
+      { duration: 420, delay: T * 0.42 + n * 55, easing: EASE, fill: 'both' })));
+    await Promise.all(anims.map(done));
+    anims.forEach(a => { try { a.commitStyles?.(); } catch (_) {} });
+    anims.forEach(a => a.cancel());
+    dlid.style.opacity = '0';
+    app.style.visibility = 'hidden'; app.style.opacity = '';
+    view = 'detail';
+    backBtn.focus({ preventScroll: true });
+    if (wantClose) closeDetail();
+  }
+
+  async function closeDetail() {
+    if (view === 'opening') { wantClose = true; return; }
+    if (view !== 'detail') return;
+    view = 'closing';
+    const finish = () => {
+      detail.hidden = true; root.classList.remove('is-detail');
+      app.style.visibility = ''; app.style.opacity = ''; app.inert = false;
+      dlid.style.opacity = ''; dcase.getAnimations().forEach(a => a.cancel());
+      view = 'rack'; stage.focus({ preventScroll: true });
+    };
+    if (reduce) { finish(); return; }
+    app.style.visibility = ''; app.style.opacity = '0';
+    const fr = centerFront(); const r0 = fr && fr.getBoundingClientRect();
+    if (!r0) { finish(); return; }
+    const r1 = dcase.getBoundingClientRect();
+    const sc = r0.width / r1.width;
+    const dx = (r0.left + r0.width / 2) - (r1.left + r1.width / 2), dy = (r0.top + r0.height / 2) - (r1.top + r1.height / 2);
+    dlid.style.opacity = '';
+    const T = TUNE.openMs * 0.85;
+    const anims = [];
+    [...blocks()].forEach((b, n) => anims.push(b.animate([{ opacity: 1 }, { opacity: 0, transform: 'translateY(10px)' }], { duration: 160, delay: n * 12, easing: 'ease-in', fill: 'forwards' })));
+    anims.push(backBtn.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' }));
+    anims.push(dlid.animate([
+      { transform: 'rotateY(-160deg)', opacity: 0, offset: 0 },
+      { transform: 'rotateY(-118deg)', opacity: 1, offset: 0.25 },
+      { transform: 'rotateY(0deg)', opacity: 1, offset: 1 }],
+      { duration: T * 0.5, delay: 80, easing: 'cubic-bezier(.45,0,.2,1)', fill: 'both' }));
+    anims.push(dcase.animate([{ transform: 'none' }, { transform: `translate(${dx}px,${dy}px) scale(${sc})` }], { duration: T * 0.55, delay: T * 0.3, easing: 'cubic-bezier(.5,0,.2,1)', fill: 'both' }));
+    anims.push(app.animate([{ opacity: 0 }, { opacity: 1 }], { duration: T * 0.35, delay: T * 0.62, easing: 'ease-out', fill: 'both' }));
+    await Promise.all(anims.map(done));
+    anims.forEach(a => a.cancel());
+    finish();
+  }
+  backBtn.addEventListener('click', closeDetail);
+
+  /* ---------- 起動 ---------- */
+  let rt = 0;
+  new ResizeObserver(() => { cancelAnimationFrame(rt); rt = requestAnimationFrame(() => { measure(); render(); }); }).observe(stage);
+  measure(); render();
+  latestBtn.disabled = false;
+})();
+</script>
+<style>
+/* 体験版の帯（公開用だけに足す） */
+.demo-band {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 2px 12px;
+  min-height: 32px;
+  padding: calc(6px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 6px max(16px, env(safe-area-inset-left, 0px));
+  background: rgba(8, 9, 12, .82); border-bottom: 1px solid rgba(244, 245, 247, .12);
+  font-size: 12px; line-height: 1.5; color: #A6ACB8;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.demo-band b { color: #F4F5F7; font-weight: 700; letter-spacing: .08em; }
+.demo-band a { color: #F4F5F7; text-decoration: underline; text-underline-offset: 3px; }
+.demo-band a:focus-visible { outline: 2px solid rgba(244, 245, 247, .6); outline-offset: 2px; border-radius: 2px; }
+.app { padding-top: calc(42px + env(safe-area-inset-top, 0px)); }
+.detail { padding-top: 34px; }
+.back { top: calc(46px + env(safe-area-inset-top, 0px)); }
+</style>
+</body>
+</html>
